@@ -133,8 +133,9 @@ def test(valdir, model, epoch, sigma):
 
             torch.cuda.synchronize()
             y_ = y_.cuda()
-            r = model(y_)
-            x_ = y_ - r
+            x_ = model(y_)
+
+            print(x_.size())
 
             x_ = x_.view(y.shape[0], y.shape[1])
             x_ = x_.cpu()

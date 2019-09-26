@@ -141,7 +141,7 @@ def datagenerator(data_dir='data/Train400', batch_size=128, patch_size=180, stri
     data = []
     # generate patches
     random.shuffle(file_list)
-    for i in range(20):
+    for i in range(1):
         patches = gen_patches(file_list[i], patch_size, stride)
         for patch in patches:
             if patch.shape[0] is patch_size and patch.shape[1] is patch_size:

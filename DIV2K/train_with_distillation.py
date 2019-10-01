@@ -44,7 +44,7 @@ class sum_squared_error(_Loss):  # PyTorch 0.4.1
 
     def forward(self, input, target):
         # return torch.sum(torch.pow(input-target,2), (0,1,2,3)).div_(2)
-        return torch.nn.functional.mse_loss(input, target, size_average=None, reduce=None, reduction='sum')
+        return torch.nn.functional.mse_loss(input, target, size_average=None, reduce=None, reduction='sum')/2
 
 best_acc = 0
 
@@ -101,24 +101,25 @@ def main():
         # train for one epoch
         train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch)
         # evaluate on validation set
-        acc1 = test(valdir, s_net, epoch, 50)
+        acc1 = validate(valdir, s_net, epoch, 50)
 
         # remember best prec@1 and save checkpoint
-        is_best = acc1 <= best_acc
+        is_best = acc1 >= best_acc
         best_acc = max(acc1, best_acc)
-        print ('Current best accuracy:', acc1)
+        print ('Current validation set best accuracy:', best_acc)
         save_checkpoint({
             'epoch': epoch,
             'arch': args.net_type,
             'state_dict': s_net.state_dict(),
             'best_acc': acc1,
             'optimizer' : optimizer.state_dict(),
-        }, is_best)
+        }, is_best, s_net)
         gc.collect()
 
     print ('Best accuracy:', best_acc)
 
-def test(valdir, model, epoch, sigma):
+
+def validate(valdir, model, epoch, sigma):
     model.eval()
 
     psnrs=[]
@@ -135,7 +136,36 @@ def test(valdir, model, epoch, sigma):
             y_ = y_.cuda()
             x_ = model(y_)
 
-            print(x_.size())
+            x_ = x_.view(y.shape[0], y.shape[1])
+            x_ = x_.cpu()
+            x_ = x_.detach().numpy().astype(np.float32)
+
+            torch.cuda.synchronize()
+            psnr_x_ = compare_psnr(x, x_)
+
+            psnrs.append(psnr_x_)
+
+    psnr_avg = np.mean(psnrs)
+
+    print('* Epoch: [{0}/{1}]\t PSNR {acc:.3f}dB'.format(epoch, args.epochs, acc=psnr_avg))
+    return psnr_avg
+
+def test(testdir, model, epoch, sigma):
+    model.eval()
+
+    psnrs=[]
+    for im in os.listdir(testdir):
+        if im.endswith(".jpg") or im.endswith(".bmp") or im.endswith(".png"):
+            x = np.array(cv2.imread(os.path.join(testdir, im), cv2.IMREAD_GRAYSCALE), dtype=np.float32) / 255.0
+
+            np.random.seed(seed=0)
+            y = x + np.random.normal(0, sigma / 255.0, x.shape)
+            y = y.astype(np.float32)
+            y_ = torch.from_numpy(y).view(1, -1, y.shape[0], y.shape[1])
+
+            torch.cuda.synchronize()
+            y_ = y_.cuda()
+            x_ = model(y_)
 
             x_ = x_.view(y.shape[0], y.shape[1])
             x_ = x_.cpu()
@@ -151,46 +181,6 @@ def test(valdir, model, epoch, sigma):
     print('* Epoch: [{0}/{1}]\t PSNR {acc:.3f}dB'.format(epoch, args.epochs, acc=psnr_avg))
     return psnr_avg
 
-def validate(val_loader, model, criterion_CE, epoch):
-    batch_time = AverageMeter()
-    losses = AverageMeter()
-    acc_psnr = AverageMeter()
-
-    # switch to evaluate mode
-    model.eval()
-
-    end = time.time()
-    for i, (inputs, target) in enumerate(val_loader):
-        target = target.cuda(async=True)
-
-        # for PyTorch 0.4.x, volatile=True is replaced by with torch.no.grad(), so uncomment the followings:
-        with torch.no_grad():
-            input_var = torch.autograd.Variable(inputs)
-            target_var = torch.autograd.Variable(target)
-            output = model(input_var)
-            loss = criterion_CE(output, target_var)
-
-        # measure accuracy and record loss
-        acc1 = get_psnr(output.data, target)
-
-        losses.update(loss.data.item(), input.size(0))
-        acc_psnr.update(acc1, input.size(0))
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-        if i % args.print_freq == 0:
-            print('Test (on val set): [Epoch {0}/{1}][Batch {2}/{3}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'PSNR {acc.val:.4f} ({acc.avg:.4f})'.format(
-                   epoch, args.epochs, i, len(val_loader), batch_time=batch_time, loss=losses, acc=acc_psnr))
-
-    print('* Epoch: [{0}/{1}]\t PSNR {acc.avg:.3f} \t Test Loss {loss.avg:.3f}'
-          .format(epoch, args.epochs, acc=acc_psnr, loss=losses))
-    return acc_psnr.avg
-
 def train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch):
     d_net.train()
     d_net.module.s_net.train()
@@ -205,7 +195,8 @@ def train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch):
         outputs, loss_distill = d_net(inputs_low, inputs_high)
 
         loss_CE = criterion_CE(outputs, targets)
-        loss = loss_CE + loss_distill.sum() / batch_size / 10000
+        loss_distill = loss_distill.sum()/batch_size
+        loss = loss_CE + 1e-4*loss_distill
 
         acc1 = get_psnr(outputs, targets)
 
@@ -217,11 +208,11 @@ def train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch):
         optimizer.step()
 
         if i % args.print_freq == 0:
-            print('Train with distillation: [Epoch %d/%d][Batch %d/%d]\t Loss %.3f, PSNR %.3f' %
-                  (epoch, args.epochs, i, len(train_loader), train_loss.avg, acc_psnr.avg))
+            print('Train with distillation: [Epoch %d/%d][Batch %d/%d]\t Loss %.3f (L2 %.3f, distill %.3f), PSNR %.3f' %
+                  (epoch, args.epochs, i, len(train_loader), train_loss.avg, loss_CE.item(), loss_distill, acc_psnr.avg))
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, model, filename='checkpoint.pth.tar'):
     directory = "runs/%s/"%(args.net_type)
     if not os.path.exists(directory):
         os.makedirs(directory)
@@ -229,6 +220,7 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, 'runs/%s/'%(args.net_type) + 'model_best.pth.tar')
+        torch.save(model, 'runs/%s/'%(args.net_type) + 'model.pth')
 
 
 class AverageMeter(object):

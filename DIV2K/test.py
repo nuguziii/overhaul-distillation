@@ -4,6 +4,7 @@ import os
 from skimage.measure import compare_psnr, compare_ssim
 from skimage.io import imread, imsave
 import models.DnCNN as dncnn
+import distiller
 import cv2
 
 def strToBool(str):
@@ -63,9 +64,16 @@ sigma = param.sigma
 result_dir = param.save_dir
 model_dir = param.model_dir
 
-checkpoint = torch.load(model_dir)
+model = torch.load(model_dir)
+'''
 model = dncnn.DnCNN()
-model.load_state_dict(checkpoint['state_dict'])
+print(model)
+weight_dict_ = checkpoint['state_dict']
+weight_dict = {}
+for k,v in weight_dict_.items():
+    weight_dict[k[7:]] = v
+model.load_state_dict(weight_dict)
+'''
 model.eval()
 
 if torch.cuda.is_available():
@@ -88,8 +96,7 @@ for im in os.listdir(os.path.join(set_dir, set)):
 
         torch.cuda.synchronize()
         y_ = y_.cuda()
-        r = model(y_)
-        x_ = y_ - r
+        x_ = model(y_)
 
         x_ = x_.view(y.shape[0], y.shape[1])
         x_ = x_.cpu()

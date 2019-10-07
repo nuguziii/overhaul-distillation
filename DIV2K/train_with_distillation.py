@@ -22,7 +22,7 @@ from data_generator import DenoisingDataset, ValDataset
 import warnings
 warnings.filterwarnings("ignore")
 
-parser = argparse.ArgumentParser(description='PyTorch ImageNet-1k Training')
+parser = argparse.ArgumentParser(description='PyTorch DnCNN Training')
 parser.add_argument('--data_path', type=str, help='path to dataset')
 parser.add_argument('--net_type', default='dncnn', type=str, help='networktype: resnet, mobilenet, dncnn')
 parser.add_argument('-j', '--workers', default=8, type=int, help='number of data loading workers (default: 4)')
@@ -30,11 +30,12 @@ parser.add_argument('--epochs', default=100, type=int, help='number of total epo
 parser.add_argument('-b', '--batch_size', default=256, type=int, help='mini-batch size (default: 256)')
 parser.add_argument('--lr', '--learning_rate', default=0.1, type=float, help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
-parser.add_argument('--weight_decay', default=1e-4, type=float, help='weight decay (default: 1e-4)')
+parser.add_argument('--weight_decay', default=1e-5, type=float, help='weight decay (default: 1e-4)')
 parser.add_argument('--print_freq', default=500, type=int, help='print frequency (default: 500)')
 parser.add_argument('--sigma', default=0, type=int, help='noise level(0,25,50)')
+parser.add_argument('--distill', default=1, type=int, help='True:1, False:0')
 
-class sum_squared_error(_Loss):  # PyTorch 0.4.1
+class sum_squared_error(_Loss):  # PyTorch 0.4.
     """
     Definition: sum_squared_error = 1/2 * nn.MSELoss(reduction = 'sum')
     The backward is defined as: input-target
@@ -90,7 +91,7 @@ def main():
     cudnn.benchmark = True
 
     for epoch in range(1, args.epochs+1):
-        x = dg.datagenerator(data_dir=traindir, batch_size=args.batch_size, patch_size=48, stride=30, verbose=False) / 255.0
+        x = dg.datagenerator(data_dir=traindir, batch_size=args.batch_size, patch_size=80, stride=10, verbose=False) / 255.0
         x = torch.from_numpy(x.transpose((0, 3, 1, 2))).type(torch.FloatTensor)
         train_loader = torch.utils.data.DataLoader(dataset=DenoisingDataset(x, args.sigma), num_workers=args.workers,
                                                    drop_last=True, batch_size=args.batch_size, shuffle=True,
@@ -99,7 +100,7 @@ def main():
         adjust_learning_rate(optimizer, epoch)
 
         # train for one epoch
-        train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch)
+        train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch, args.distill)
         # evaluate on validation set
         acc1 = validate(valdir, s_net, epoch, 50)
 
@@ -181,7 +182,7 @@ def test(testdir, model, epoch, sigma):
     print('* Epoch: [{0}/{1}]\t PSNR {acc:.3f}dB'.format(epoch, args.epochs, acc=psnr_avg))
     return psnr_avg
 
-def train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch):
+def train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch, distill):
     d_net.train()
     d_net.module.s_net.train()
     d_net.module.t_net.train()
@@ -192,11 +193,16 @@ def train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch):
     for i, (inputs_low, targets, inputs_high) in enumerate(train_loader):
         targets = targets.cuda(async=True)
         batch_size = inputs_low.shape[0]
-        outputs, loss_distill = d_net(inputs_low, inputs_high)
+        outputt, outputs, loss_distill = d_net(inputs_low, inputs_high)
 
-        loss_CE = criterion_CE(outputs, targets)
+        loss_teacher = criterion_CE(outputt, targets)
+        loss_student = criterion_CE(outputs, targets)
         loss_distill = loss_distill.sum()/batch_size
-        loss = loss_CE + 1e-4*loss_distill
+
+        if distill==1:
+            loss = 10*loss_teacher + loss_student + 1e-3*loss_distill
+        elif distill==0:
+            loss = loss_student
 
         acc1 = get_psnr(outputs, targets)
 
@@ -208,8 +214,8 @@ def train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch):
         optimizer.step()
 
         if i % args.print_freq == 0:
-            print('Train with distillation: [Epoch %d/%d][Batch %d/%d]\t Loss %.3f (L2 %.3f, distill %.3f), PSNR %.3f' %
-                  (epoch, args.epochs, i, len(train_loader), train_loss.avg, loss_CE.item(), loss_distill, acc_psnr.avg))
+            print('Train with distillation: [Epoch %d/%d][Batch %d/%d]\t Loss %.3f (L2(t) %.3f, L2(s) %.3f, distill %.3f), PSNR %.3f' %
+                  (epoch, args.epochs, i, len(train_loader), train_loss.avg, loss_teacher.item(), loss_student.item(), loss_distill, acc_psnr.avg))
 
 
 def save_checkpoint(state, is_best, model, filename='checkpoint.pth.tar'):

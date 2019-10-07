@@ -49,10 +49,11 @@ class DenoisingDataset(Dataset):
         batch_y = batch_x + noise
         '''
         if self.sigma==0:
-            sig=torch.randint(0,30, size=(batch_x.size(0),),dtype=batch_x.dtype)
-            sig2=torch.randint(30,60, size=(batch_x.size(0),),dtype=batch_x.dtype)
+            sig=torch.randint(0,20, size=(batch_x.size(0),),dtype=batch_x.dtype)
+            sig2=torch.randint(0,55, size=(batch_x.size(0),),dtype=batch_x.dtype)
         else:
             sig=self.sigma
+
         noise1 = torch.randn(batch_x.size(), dtype=batch_x.dtype).mul_(sig/255.0)
         noise2 = torch.randn(batch_x.size(), dtype=batch_x.dtype).mul_(sig2/255.0)
         batch_y = batch_x + noise1
@@ -134,14 +135,14 @@ def gen_patches(file_name, patch_size, stride):
     return patches
 
 
-def datagenerator(data_dir='data/Train400', batch_size=128, patch_size=180, stride=100, verbose=True):
+def datagenerator(data_dir='data/Train400', batch_size=128, patch_size=80, stride=10, verbose=True):
     # generate clean patches from a dataset
     file_list = glob.glob(data_dir+'/*.png')  # get name list of all .png files
     # initrialize
     data = []
     # generate patches
-    random.shuffle(file_list)
-    for i in range(20):
+    #random.shuffle(file_list)
+    for i in range(len(file_list)):
         patches = gen_patches(file_list[i], patch_size, stride)
         for patch in patches:
             if patch.shape[0] is patch_size and patch.shape[1] is patch_size:

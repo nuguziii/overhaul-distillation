@@ -69,4 +69,4 @@ class Distiller(nn.Module):
             loss_distill += distillation_loss(s_feats[i], t_feats[i].detach(), getattr(self, 'margin%d' % (i+1))) \
                             / 2 ** (feat_num - i - 1)
 
-        return s_out, loss_distill
+        return t_out, s_out, loss_distill

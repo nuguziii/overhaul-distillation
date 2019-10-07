@@ -15,10 +15,11 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.register('type', 'bool', strToBool)
 parser.add_argument('--sigma', type=int, default=25)
-parser.add_argument('--testset', type=int, default=25, help='1: Urban100 / 2: Set14 / 3: Set5 / 4: Manga109 / 5: B100')
+parser.add_argument('--testset', type=int, default=25, help='1: Urban100 / 2: Set14 / 3: Set5 / 4: Manga109 / 5: B100 / 6: Set68')
 parser.add_argument('--data_dir', default='F:\Test')
 parser.add_argument('--model_dir', default='F:\models\model_0905\\net.pth')
-parser.add_argument('--save_dir', default='F:\results')
+parser.add_argument('--save_dir', default='F:\\results')
+parser.add_argument('--flag', type=int, default=1, help='1: test')
 param = parser.parse_args()
 
 def save_result(result, path):
@@ -57,67 +58,82 @@ def show(x, title=None, cbar=False, figsize=None):
         plt.colorbar()
     plt.show()
 
-set_dir = param.data_dir
-set_list = {1: "Urban100", 2: "Set14", 3: "Set5", 4: "Manga109", 5: "B100"}
-set = set_list[param.testset]
-sigma = param.sigma
-result_dir = param.save_dir
-model_dir = param.model_dir
+def test(param):
+    set_dir = param.data_dir
+    set_list = {1: "Urban100", 2: "Set14", 3: "Set5", 4: "Manga109", 5: "B100", 6: "Set68"}
+    set = set_list[param.testset]
+    sigma = param.sigma
+    result_dir = param.save_dir
+    model_dir = param.model_dir
 
-model = torch.load(model_dir)
-'''
-model = dncnn.DnCNN()
-print(model)
-weight_dict_ = checkpoint['state_dict']
-weight_dict = {}
-for k,v in weight_dict_.items():
-    weight_dict[k[7:]] = v
-model.load_state_dict(weight_dict)
-'''
-model.eval()
+    model = torch.load(model_dir)
+    '''
+    model = dncnn.DnCNN()
+    print(model)
+    weight_dict_ = checkpoint['state_dict']
+    weight_dict = {}
+    for k,v in weight_dict_.items():
+        weight_dict[k[7:]] = v
+    model.load_state_dict(weight_dict)
+    '''
+    model.eval()
 
-if torch.cuda.is_available():
-    model = model.cuda()
+    if torch.cuda.is_available():
+        model = model.cuda()
 
-if not os.path.exists(os.path.join(result_dir, set)):
-    os.mkdir(os.path.join(result_dir, set))
-psnrs = []
-ssims = []
+    if not os.path.exists(os.path.join(result_dir, set)):
+        os.mkdir(os.path.join(result_dir, set))
+    psnrs = []
+    ssims = []
 
-for im in os.listdir(os.path.join(set_dir, set)):
-    if im.endswith(".jpg") or im.endswith(".bmp") or im.endswith(".png"):
-        x = np.array(cv2.imread(os.path.join(set_dir, set, im), cv2.IMREAD_GRAYSCALE), dtype=np.float32) / 255.0
-        init_shape = x.shape
+    for im in os.listdir(os.path.join(set_dir, set)):
+        if im.endswith(".jpg") or im.endswith(".bmp") or im.endswith(".png"):
+            x = np.array(cv2.imread(os.path.join(set_dir, set, im), cv2.IMREAD_GRAYSCALE), dtype=np.float32) / 255.0
+            init_shape = x.shape
 
-        np.random.seed(seed=0)
-        y = x+np.random.normal(0, sigma/255.0, x.shape)
-        y = y.astype(np.float32)
-        y_ = torch.from_numpy(y).view(1, -1, y.shape[0], y.shape[1])
+            np.random.seed(seed=0)
+            y = x+np.random.normal(0, sigma/255.0, x.shape)
+            y = y.astype(np.float32)
+            y_ = torch.from_numpy(y).view(1, -1, y.shape[0], y.shape[1])
 
-        torch.cuda.synchronize()
-        y_ = y_.cuda()
-        x_ = model(y_)
+            torch.cuda.synchronize()
+            y_ = y_.cuda()
+            x_ = model(y_)
 
-        x_ = x_.view(y.shape[0], y.shape[1])
-        x_ = x_.cpu()
-        x_ = x_.detach().numpy().astype(np.float32)
+            x_ = x_.view(y.shape[0], y.shape[1])
+            x_ = x_.cpu()
+            x_ = x_.detach().numpy().astype(np.float32)
 
-        torch.cuda.synchronize()
-        print('%10s : %10s' % (set, im))
-        psnr_x_ = compare_psnr(x, x_)
-        ssim_x_ = compare_ssim(x, x_)
+            torch.cuda.synchronize()
+            print('%10s : %10s' % (set, im))
+            psnr_x_ = compare_psnr(x, x_)
+            ssim_x_ = compare_ssim(x, x_)
 
-        psnrs.append(psnr_x_)
-        ssims.append(ssim_x_)
+            psnrs.append(psnr_x_)
+            ssims.append(ssim_x_)
 
-        name, ext = os.path.splitext(im)
-        #show(np.hstack((y, x_)))  # show the image
-        save_result(x_, path=os.path.join(result_dir, set, name + '_d' + ext))
+            name, ext = os.path.splitext(im)
+            #show(np.hstack((y, x_)))  # show the image
+            save_result(x_, path=os.path.join(result_dir, set, name + '_d' + ext))
 
-psnr_avg = np.mean(psnrs)
-ssim_avg = np.mean(ssims)
-psnrs.append(psnr_avg)
-ssims.append(ssim_avg)
+    psnr_avg = np.mean(psnrs)
+    ssim_avg = np.mean(ssims)
+    psnrs.append(psnr_avg)
+    ssims.append(ssim_avg)
 
-print('Datset: {0:10s} \n  PSNR = {1:2.2f}dB, SSIM = {2:1.4f}'.format(set, psnr_avg, ssim_avg))
+    print('Datset: {0:10s} \n  PSNR = {1:2.2f}dB, SSIM = {2:1.4f}'.format(set, psnr_avg, ssim_avg))
 
+def print_checkpoint(param):
+    model_dir = param.model_dir
+
+    checkpoint = torch.load(model_dir)
+
+    print(checkpoint['epoch'])
+
+
+
+if __name__ == '__main__':
+    if param.flag==1:
+        test(param)
+    else:
+        print_checkpoint(param)

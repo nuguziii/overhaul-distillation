@@ -32,10 +32,10 @@ class DnCNN(nn.Module):
 
     def get_bn_before_relu(self):
         print(self.model)
-        bn1 = self.model[3][-2]
-        bn2 = self.model[5][-2]
-        bn3 = self.model[15][-2]
-        bn4 = self.model[17][-2]
+        bn1 = self.model[5][-2]
+        bn2 = self.model[7][-2]
+        bn3 = self.model[17][-2]
+        bn4 = self.model[19][-2]
 
         return [bn1, bn2, bn3, bn4]
 

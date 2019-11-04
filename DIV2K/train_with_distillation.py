@@ -1,9 +1,10 @@
 import argparse
 import os
 import shutil
-import time
+
 
 import torch
+from torch import nn
 import torch.backends.cudnn as cudnn
 from torch.nn.modules.loss import _Loss
 import torch.optim as optim
@@ -30,10 +31,33 @@ parser.add_argument('--epochs', default=100, type=int, help='number of total epo
 parser.add_argument('-b', '--batch_size', default=256, type=int, help='mini-batch size (default: 256)')
 parser.add_argument('--lr', '--learning_rate', default=0.1, type=float, help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
-parser.add_argument('--weight_decay', default=1e-5, type=float, help='weight decay (default: 1e-4)')
+parser.add_argument('--weight_decay', default=1e-4, type=float, help='weight decay (default: 1e-4)')
 parser.add_argument('--print_freq', default=500, type=int, help='print frequency (default: 500)')
 parser.add_argument('--sigma', default=0, type=int, help='noise level(0,25,50)')
 parser.add_argument('--distill', default=1, type=int, help='True:1, False:0')
+parser.add_argument('--premodel_dir', default='F:\models\model_pretrained\model.pth')
+
+class DnCNN(nn.Module):
+
+    def __init__(self, depth=17, n_channels=64, image_channels=1, use_bnorm=True, kernel_size=3):
+        super(DnCNN, self).__init__()
+        kernel_size = 3
+        padding = 1
+        layers = []
+        layers.append(nn.Conv2d(in_channels=image_channels, out_channels=n_channels, kernel_size=kernel_size, padding=padding, bias=True))
+        layers.append(nn.ReLU(inplace=True))
+        for _ in range(depth-2):
+            layers.append(nn.Conv2d(in_channels=n_channels, out_channels=n_channels, kernel_size=kernel_size, padding=padding, bias=False))
+            layers.append(nn.BatchNorm2d(n_channels, eps=0.0001, momentum=0.95))
+            layers.append(nn.ReLU(inplace=True))
+        layers.append(nn.Conv2d(in_channels=n_channels, out_channels=image_channels, kernel_size=kernel_size, padding=padding, bias=False))
+        self.dncnn = nn.Sequential(*layers)
+        self._initialize_weights()
+
+    def forward(self, x):
+        y = x
+        out = self.dncnn(x)
+        return y-out
 
 class sum_squared_error(_Loss):  # PyTorch 0.4.
     """
@@ -69,6 +93,13 @@ def main():
         print('undefined network type !!!')
         raise
 
+    checkpoint = torch.load('./runs/dncnn_pretrained/model_best.pth.tar')
+    weight_dict_ = checkpoint['state_dict']
+    weight_dict = {}
+    for k, v in weight_dict_.items():
+        weight_dict[k[7:]] = v
+    t_net.load_state_dict(weight_dict)
+
     d_net = distiller.Distiller(t_net, s_net)
 
     print ('Teacher Net: ')
@@ -85,13 +116,21 @@ def main():
     # define loss function (criterion) and optimizer
     #criterion_CE = nn.CrossEntropyLoss().cuda()
     criterion_CE = sum_squared_error()
-    optimizer = optim.Adam(s_net.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(0.5, 0.999))
+
+    optimizer = None
+    if args.distill == 1:
+        optimizer = optim.Adam(list(s_net.parameters()) + list(d_net.module.Connectors.parameters()), lr=args.lr, weight_decay=args.weight_decay, betas=(0.5, 0.999))
+        #optimizer = torch.optim.SGD(list(s_net.parameters()) + list(d_net.module.Connectors.parameters()), args.lr,momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+
+    elif args.distill == 0:
+        optimizer = optim.Adam(s_net.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(0.5, 0.999))
+
     #optimizer = torch.optim.SGD(list(s_net.parameters()) + list(d_net.module.Connectors.parameters()), args.lr,
     #                            momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
     cudnn.benchmark = True
 
     for epoch in range(1, args.epochs+1):
-        x = dg.datagenerator(data_dir=traindir, batch_size=args.batch_size, patch_size=80, stride=10, verbose=False) / 255.0
+        x = dg.datagenerator(data_dir=traindir, batch_size=args.batch_size, patch_size=40, stride=10, verbose=False) / 255.0
         x = torch.from_numpy(x.transpose((0, 3, 1, 2))).type(torch.FloatTensor)
         train_loader = torch.utils.data.DataLoader(dataset=DenoisingDataset(x, args.sigma), num_workers=args.workers,
                                                    drop_last=True, batch_size=args.batch_size, shuffle=True,
@@ -100,7 +139,7 @@ def main():
         adjust_learning_rate(optimizer, epoch)
 
         # train for one epoch
-        train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch, args.distill)
+        loss = train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch, args.distill)
         # evaluate on validation set
         acc1 = validate(valdir, s_net, epoch, 50)
 
@@ -110,6 +149,7 @@ def main():
         print ('Current validation set best accuracy:', best_acc)
         save_checkpoint({
             'epoch': epoch,
+            'loss' : loss,
             'arch': args.net_type,
             'state_dict': s_net.state_dict(),
             'best_acc': acc1,
@@ -185,7 +225,7 @@ def test(testdir, model, epoch, sigma):
 def train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch, distill):
     d_net.train()
     d_net.module.s_net.train()
-    d_net.module.t_net.train()
+    d_net.module.t_net.eval()
 
     train_loss = AverageMeter()
     acc_psnr = AverageMeter()
@@ -195,28 +235,32 @@ def train_with_distill(train_loader, d_net, optimizer, criterion_CE, epoch, dist
         batch_size = inputs_low.shape[0]
         outputt, outputs, loss_distill = d_net(inputs_low, inputs_high)
 
-        loss_teacher = criterion_CE(outputt, targets)
+        loss_t = criterion_CE(outputt, targets)
+
         loss_student = criterion_CE(outputs, targets)
         loss_distill = loss_distill.sum()/batch_size
+        loss = None
 
         if distill==1:
-            loss = 10*loss_teacher + loss_student + 1e-3*loss_distill
+            loss = loss_student + 1e-1 * loss_distill
+
         elif distill==0:
             loss = loss_student
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
         acc1 = get_psnr(outputs, targets)
 
         train_loss.update(loss.item(), batch_size)
         acc_psnr.update(acc1, batch_size)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
         if i % args.print_freq == 0:
             print('Train with distillation: [Epoch %d/%d][Batch %d/%d]\t Loss %.3f (L2(t) %.3f, L2(s) %.3f, distill %.3f), PSNR %.3f' %
-                  (epoch, args.epochs, i, len(train_loader), train_loss.avg, loss_teacher.item(), loss_student.item(), loss_distill, acc_psnr.avg))
+                  (epoch, args.epochs, i, len(train_loader), train_loss.avg, loss_t.item(), loss_student.item(), loss_distill, acc_psnr.avg))
 
+    return train_loss
 
 def save_checkpoint(state, is_best, model, filename='checkpoint.pth.tar'):
     directory = "runs/%s/"%(args.net_type)

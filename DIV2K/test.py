@@ -3,9 +3,28 @@ import torch
 import os
 from skimage.measure import compare_psnr, compare_ssim
 from skimage.io import imread, imsave
-import models.DnCNN as dncnn
-import distiller
 import cv2
+from torch import nn
+
+class Model(nn.Module):
+    def __init__(self, depth=20, n_channels=64, image_channels=1, use_bnorm=True, kernel_size=3):
+        super(Model, self).__init__()
+        kernel_size = 3
+        padding = 1
+        d_layers = []
+
+        d_layers.append(nn.Conv2d(in_channels=image_channels, out_channels=n_channels, kernel_size=kernel_size, padding=padding, bias=True))
+        d_layers.append(nn.ReLU(inplace=True))
+        for _ in range(depth-2):
+            d_layers.append(nn.Conv2d(in_channels=n_channels, out_channels=n_channels, kernel_size=kernel_size, padding=padding, bias=False))
+            d_layers.append(nn.BatchNorm2d(n_channels, eps=0.0001, momentum = 0.95))
+            d_layers.append(nn.ReLU(inplace=True))
+        d_layers.append(nn.Conv2d(in_channels=n_channels, out_channels=image_channels, kernel_size=kernel_size, padding=padding, bias=False))
+        self.dncnn = nn.Sequential(*d_layers)
+
+    def forward(self, x):
+        out = self.dncnn(x)
+        return x-out
 
 def strToBool(str):
 	return str.lower() in ('true', 'yes', 'on', 't', '1')
@@ -105,7 +124,7 @@ def test(param):
             x_ = x_.detach().numpy().astype(np.float32)
 
             torch.cuda.synchronize()
-            print('%10s : %10s' % (set, im))
+            #print('%10s : %10s' % (set, im))
             psnr_x_ = compare_psnr(x, x_)
             ssim_x_ = compare_ssim(x, x_)
 

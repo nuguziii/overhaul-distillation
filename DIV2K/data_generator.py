@@ -50,7 +50,7 @@ class DenoisingDataset(Dataset):
         '''
         if self.sigma==0:
             sig=torch.randint(0,20, size=(batch_x.size(0),),dtype=batch_x.dtype)
-            sig2=torch.randint(0,55, size=(batch_x.size(0),),dtype=batch_x.dtype)
+            sig2=torch.randint(int(sig),55, size=(batch_x.size(0),),dtype=batch_x.dtype)
         else:
             sig=self.sigma
 
@@ -135,7 +135,7 @@ def gen_patches(file_name, patch_size, stride):
     return patches
 
 
-def datagenerator(data_dir='data/Train400', batch_size=128, patch_size=80, stride=10, verbose=True):
+def datagenerator(data_dir='data/Train400', batch_size=128, patch_size=40, stride=10, verbose=True):
     # generate clean patches from a dataset
     file_list = glob.glob(data_dir+'/*.png')  # get name list of all .png files
     # initrialize
